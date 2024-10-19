@@ -1,8 +1,11 @@
+
 "use client";
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import Navbar from "../components/navbar";
 import axios from "axios";
+import { toast, ToastContainer } from "react-toastify"; // Import toast for notifications
+import 'react-toastify/dist/ReactToastify.css'; // Import toast styles
 
 export default function Signup() {
   const [user, setUser] = useState({
@@ -13,15 +16,19 @@ export default function Signup() {
 
   const [buttonDisabled, setButtonDisabled] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const onSignup = async (e: React.FormEvent) => {
     e.preventDefault(); 
     try {
       setLoading(true);
-      const response = await axios.post("http://127.0.0.1:8000/auth/signup", user);
+      const response = await axios.post("https://headlineai.graycoast-7c0c32b7.eastus.azurecontainerapps.io/auth/signup", user);
       console.log("Signup success", response.data);
-      setSuccessMessage("Signup successful!");
+      
+      // Show success toast
+      toast.success("Signup successful!", {
+        position: "top-right",
+        autoClose: 3000,
+      });
 
       setUser({
         username: "",
@@ -29,9 +36,13 @@ export default function Signup() {
         password: "",
       });
 
-      setTimeout(() => setSuccessMessage(null), 5000);
     } catch (error: any) {
       console.log("Signup failed", error.message);
+      // Show error toast
+      toast.error(error.response?.data?.detail || "Signup failed!", {
+        position: "top-right",
+        autoClose: 3000,
+      });
     } finally {
       setLoading(false);
     }
@@ -48,12 +59,6 @@ export default function Signup() {
   return (
     <>
       <Navbar />
-      {successMessage && (
-        <div className="fixed top-4 right-4 bg-green-500 text-white py-2 px-4 rounded shadow-lg">
-          {successMessage}
-        </div>
-      )}
-
       <div className="min-h-screen flex flex-col items-center justify-center bg-gray-100">
         <div className="w-full max-w-md bg-white p-8 rounded-lg shadow-md">
           <h2 className="text-2xl font-bold text-center mb-6">Sign Up</h2>
@@ -115,6 +120,9 @@ export default function Signup() {
           </p>
         </div>
       </div>
+
+      {/* Toast container for showing notifications */}
+      <ToastContainer />
     </>
   );
 }
