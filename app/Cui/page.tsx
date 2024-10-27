@@ -1,157 +1,203 @@
 
 "use client";
-import { useState, useEffect, SetStateAction } from 'react';
-import Navbar from '../components/navbar';
+import React, { useState, useEffect } from 'react';
+import axios from "axios";
+import ConversationHistory from "../components/cui/sidebar";
+import ChatInterface from "../components/cui/cui";
+import Navbar from '../components/Landingpage/navbar';
 
 const Home = () => {
     const [input, setInput] = useState('');
-    const [history, setHistory] = useState([
-        { id: 1, name: 'Conversation 1', messages: [] },
-        { id: 2, name: 'Conversation 2', messages: [] }
-    ]);
-    const [currentChatId, setCurrentChatId] = useState(1);
-    const [isChatStarted, setIsChatStarted] = useState(false);
+    const [history, setHistory] = useState([]);
+    const [currentChatId, setCurrentChatId] = useState(null);
     const [loading, setLoading] = useState(false);
     const [token, setToken] = useState<string | null>(null);
     const [isLoggedIn, setIsLoggedIn] = useState(false);
+    const [userId, setUserId] = useState(null);
 
     useEffect(() => {
-        const storedToken = localStorage.getItem('auth_token');
+        const storedToken = localStorage.getItem("auth_token");
         if (storedToken) {
             setToken(storedToken);
             setIsLoggedIn(true);
+            fetchUserId();
         } else {
             setIsLoggedIn(false);
         }
     }, []);
 
-    const currentChat = history.find(convo => convo.id === currentChatId);
+    const axiosInstance = axios.create({
+        headers: {
+            Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
+        },
+    });
 
-    const handleSend = async () => {
-        if (input.trim() && token) {
+    const fetchUserId = async () => {
+        try {
+            const response = await axiosInstance.get('http://127.0.0.1:8080/user/get_current_user_details/');
+            const { id } = response.data;
+            setUserId(id);
+            fetchUserConversations(id);
+        } catch (error) {
+            console.error('Error fetching user ID:', error);
+        }
+    };
+
+    const fetchUserConversations = async (userId) => {
+        try {
+            const response = await axiosInstance.get(`http://127.0.0.1:8080/history/get_all_user_conversations/${userId}`);
+            
+            const conversations = response.data.map((conversation, index) => ({
+                id: conversation.conversation_id,
+                name: `Conversation ${index + 1}`,
+                isActive: conversation.is_active,
+                createdAt: conversation.created_at,
+                messages: [] // Initialize with an empty messages array
+            }));
+    
+            setHistory(conversations);
+        } catch (error) {
+            console.error("Error fetching conversations:", error);
+        }
+    };
+    
+    const fetchConversationHistory = async (conversationId) => {
+        try {
+            const response = await axiosInstance.get(`http://127.0.0.1:8080/history/get_conversation_history/${conversationId}`);
+            console.log(`Fetched history for conversation ID: ${conversationId}`, response.data); // Log the full response
+            
+            // Extract messages from the response and format them
+            const messages = response.data.messages.map(message => ({
+                role: message.role,
+                content: message.content,
+                createdAt: message.created_at
+            }));
+
+            return messages;
+        } catch (error) {
+            console.error(`Error fetching history for conversation ${conversationId}:`, error);
+            return [];
+        }
+    };
+    
+    const handleSend = async (message) => {
+        if (message.trim() && token) {
             setLoading(true);
-            const newMessage = { user: input };
+
             try {
-                const response = await fetch('https://headlineai.graycoast-7c0c32b7.eastus.azurecontainerapps.io/ai/call_agent', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    },
-                    body: JSON.stringify({ query: input })
-                });
-                if (!response.ok) {
-                    throw new Error('Failed to fetch data from backend');
+                const response = await axiosInstance.post(
+                    "http://127.0.0.1:8080/ai/call_agent",
+                    { query: message }
+                );
+                const aiMessage = response.data.messages[response.data.messages.length - 1];
+
+                if (aiMessage?.role === "ai") {
+                    const formattedMessage = formatResponse(aiMessage.content);
+                    const updatedHistory = history.map((convo) =>
+                        convo.id === currentChatId
+                            ? {
+                                ...convo,
+                                messages: [
+                                    ...convo.messages,
+                                    { role: "user", content: message },
+                                    { role: "ai", content: formattedMessage },
+                                ],
+                            }
+                            : convo
+                    );
+
+                    setHistory(updatedHistory);
+                    setInput("");
+                    await saveMessage("user", message);
+                    await saveMessage("ai", formattedMessage);
+                    console.log("Message sent successfully:", message); // Success log
+                    console.log(`Message saved in conversation ID: ${currentChatId}`); // Log the conversation ID
                 }
-                
-                const data = await response.json();
-
-            // Extract only the current bot reply, without merging with previous ones
-                const botReply = data.messages[data.messages.length - 1].content;  // Get the last message (current bot reply)
-
-
-                const updatedHistory = history.map(convo =>
-                   convo.id === currentChatId
-                        ? {
-                             ...convo,
-                             messages: [
-                              ...convo.messages,  // Keep the previous messages intact
-                                { user: input, bot: botReply } ] }: convo);
-const currentConvo = updatedHistory.find(convo => convo.id === currentChatId);
-const latestResponse = currentConvo?.messages.slice(-1)[0].bot;  // Get the last bot reply in the conversation
-
-// Print only the latest bot reply for the current query
-console.log(latestResponse);
-
-                setHistory(updatedHistory);
-                setInput('');
-                setIsChatStarted(true);
             } catch (error) {
-                console.error('Error fetching data:', error);
+                console.error("Error fetching data:", error); // Error log
             } finally {
                 setLoading(false);
             }
         }
     };
 
-    const handleNewChat = () => {
-        const newChatId = history.length + 1;
-        const newChat = { id: newChatId, name: `Conversation ${newChatId}`, messages: [] };
-        setHistory([...history, newChat]);
-        setCurrentChatId(newChatId);
-        setIsChatStarted(false);
+    const formatResponse = (response) => {
+        return response
+            .replace(/### (.+)/g, '<h2 class="font-bold text-lg mt-4 mb-2">$1</h2>')
+            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\n/g, '<br/>');
     };
 
-    const handleConversationClick = (convoId: SetStateAction<number>) => {
-        setCurrentChatId(convoId);
-        setIsChatStarted(false);
+    const handleNewChat = async () => {
+        if (!userId) {
+            console.error("User ID is not available. Cannot start a new conversation.");
+            return;
+        }
+
+        try {
+            const response = await axiosInstance.post('https://headlineai.graycoast-7c0c32b7.eastus.azurecontainerapps.io/history/start_new_conversation/', { userId });
+            const { conversation_id } = response.data;
+
+            const newConversation = {
+                id: conversation_id,
+                name: `Conversation ${history.length + 1}`,
+                messages: []
+            };
+
+            setHistory(prev => [...prev, newConversation]);
+            setCurrentChatId(conversation_id);
+            console.log("New conversation started successfully:", newConversation); // Success log
+        } catch (error) {
+            console.error('Error starting a new conversation:', error); // Error log
+        }
     };
+
+    const handleConversationClick = async (id) => {
+        setCurrentChatId(id);
+        console.log(`Opening conversation ID: ${id}`); // Log the conversation ID being opened
+        
+        // Fetch the conversation history when the conversation is clicked
+        const conversationHistory = await fetchConversationHistory(id);
+        
+        // Update the current conversation with fetched messages
+        setHistory(prevHistory =>
+            prevHistory.map(convo =>
+                convo.id === id ? { ...convo, messages: conversationHistory } : convo
+            )
+        );
+    };
+    
+    const saveMessage = async (role, content) => {
+        try {
+            await axiosInstance.post(`http://127.0.0.1:8080/history/add_message/${currentChatId}`, { role, content });
+            console.log("Message saved successfully:", content); // Success log
+            console.log(`Message saved in conversation ID: ${currentChatId}`); // Log the conversation ID
+        } catch (error) {
+            console.error("Error saving message:", error.response?.data || error.message); // Error log
+        }
+    };
+
+    const currentChat = history.find((convo) => convo.id === currentChatId);
 
     return (
         <>
-            <Navbar />
-            <div className="flex h-[90vh]">
-                <div className="w-1/4 bg-gray-200 p-4">
-                    <h2 className="text-lg font-semibold mb-4">Conversation History</h2>
-                    {history.map(convo => (
-                        <div
-                            key={convo.id}
-                            className={`mb-2 p-2 bg-white rounded shadow cursor-pointer ${convo.id === currentChatId ? 'bg-blue-100' : ''}`}
-                            onClick={() => handleConversationClick(convo.id)}
-                        >
-                            <h3>{convo.name}</h3>
-                        </div>
-                    ))}
-                    <button
-                        onClick={handleNewChat}
-                        className="mt-4 p-2 bg-zinc-900 text-white rounded w-full"
-                    >
-                        Start New Conversation
-                    </button>
-                </div>
-                <div className="w-3/4 flex flex-col ">
-                    {!isLoggedIn ? (
-                        <div className="flex-grow flex justify-center items-center">
-                            <h2 className="text-xl font-semibold">Please log in to chat with the CUI</h2>
-                        </div>
-                    ) : (
-                        <>
-                            {currentChat?.messages.length > 0 ? (
-                                <div className="flex-grow p-4 overflow-y-scroll">
-                                    {currentChat.messages.map((msg, index) => (
-                                        <div key={index} className="mb-2">
-                                            <p className="text-right"><strong>You:</strong> {msg.user}</p>
-                                            <p><strong>Bot:</strong> {msg.bot}</p>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : (
-                                <div className="flex-grow flex justify-center items-center">
-                                </div>
-                            )}
-                            <div className={`p-4 bg-gray-100 flex ${!isChatStarted && currentChat?.messages.length === 0 ? 'justify-center items-center h-[90vh]' : ''}`}>
-                                <input
-                                    type="text"
-                                    placeholder='How can I help you today?'
-                                    value={input}
-                                    onChange={(e) => setInput(e.target.value)}
-                                    className="flex-grow p-2 border rounded-full "
-                                />
-                                <button
-                                    onClick={handleSend}
-                                    className="p-2 bg-zinc-500 text-white rounded"
-                                    disabled={loading}
-                                >
-                                    {loading ? 'Sending...' : 'Send'}
-                                </button>
-                            </div>
-                        </>
-                    )}
-                </div>
-            </div>
-        </>
+        <div className="flex h-screen">
+            <ConversationHistory 
+                history={history}
+                currentChatId={currentChatId}
+                onConversationClick={handleConversationClick}
+                onNewChat={handleNewChat}
+            />
+            <ChatInterface
+                currentChat={currentChat}
+                input={input}
+                setInput={setInput}
+                handleSend={handleSend}
+                loading={loading}
+                isLoggedIn={isLoggedIn}
+            />
+        </div></>
     );
 };
 
 export default Home;
-
